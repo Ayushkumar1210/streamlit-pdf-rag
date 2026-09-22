@@ -4321,12 +4321,625 @@
 
 
 
+# import streamlit as st
+# import tempfile
+# import uuid
+# import hashlib
+# from pathlib import Path
+
+# from dotenv import load_dotenv
+
+# from langchain_community.document_loaders import PyPDFLoader
+# from langchain_text_splitters import RecursiveCharacterTextSplitter
+# from langchain_huggingface import HuggingFaceEmbeddings
+# from langchain_chroma import Chroma
+# from langchain_groq import ChatGroq
+
+# from langchain_core.prompts import PromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain_core.documents import Document
+
+
+# # =============================
+# # CONFIGURATION
+# # =============================
+
+# st.set_page_config(
+#     page_title="PDF RAG Chatbot",
+#     page_icon="📄"
+# )
+
+# st.title("📄 PDF RAG Chatbot")
+
+# project_folder = Path(__file__).resolve().parent
+# load_dotenv(project_folder / ".env")
+
+
+# # =============================
+# # SESSION STATE
+# # =============================
+
+# if "chat_history" not in st.session_state:
+#     st.session_state.chat_history = []
+
+
+# if "pdf_hash" not in st.session_state:
+#     st.session_state.pdf_hash = None
+
+
+# if "vector_store" not in st.session_state:
+#     st.session_state.vector_store = None
+
+
+# if st.button("🗑️ Clear Chat History"):
+
+#     st.session_state.chat_history = []
+#     st.rerun()
+
+
+# # =============================
+# # CACHED PDF LOADING + CHUNKING
+# # =============================
+
+# @st.cache_data
+# def load_and_split_pdf(pdf_bytes):
+
+#     with tempfile.NamedTemporaryFile(
+#         delete=False,
+#         suffix=".pdf"
+#     ) as temp_file:
+
+#         temp_file.write(pdf_bytes)
+#         pdf_path = temp_file.name
+
+#     try:
+
+#         loader = PyPDFLoader(pdf_path)
+#         documents = loader.load()
+
+#         text_splitter = RecursiveCharacterTextSplitter(
+#             chunk_size=500,
+#             chunk_overlap=50
+#         )
+
+#         chunks = text_splitter.split_documents(documents)
+
+#         return chunks
+
+#     finally:
+
+#         Path(pdf_path).unlink(missing_ok=True)
+
+
+# # =============================
+# # CACHED EMBEDDING MODEL
+# # =============================
+
+# @st.cache_resource
+# def get_embeddings():
+
+#     return HuggingFaceEmbeddings(
+#         model_name="sentence-transformers/all-MiniLM-L6-v2"
+#     )
+
+
+# # =============================
+# # PDF UPLOAD
+# # =============================
+
+# uploaded_file = st.file_uploader(
+#     "Upload your PDF",
+#     type=["pdf"]
+# )
+
+
+# if uploaded_file is None:
+
+#     st.info("Please upload a PDF to start chatting.")
+#     st.stop()
+
+
+# # =============================
+# # PDF PROCESSING
+# # =============================
+
+# pdf_bytes = uploaded_file.getvalue()
+
+# pdf_hash = hashlib.md5(pdf_bytes).hexdigest()
+
+
+# try:
+
+#     with st.spinner("Loading and splitting PDF..."):
+
+#         chunks = load_and_split_pdf(pdf_bytes)
+
+#     if not chunks:
+
+#         st.error("No readable text found in this PDF.")
+#         st.stop()
+
+#     st.success(
+#         f"PDF processed successfully! "
+#         f"Total chunks: {len(chunks)}"
+#     )
+
+# except Exception:
+
+#     st.error(
+#         "Unable to process this PDF. "
+#         "Please upload a valid PDF."
+#     )
+
+#     st.stop()
+
+
+# # =============================
+# # EMBEDDINGS
+# # =============================
+
+# try:
+
+#     with st.spinner("Loading embedding model..."):
+
+#         embeddings = get_embeddings()
+
+# except Exception:
+
+#     st.error("Error while loading embedding model.")
+#     st.stop()
+
+
+# # =============================
+# # VECTOR DATABASE REUSE
+# # =============================
+
+# if (
+#     st.session_state.pdf_hash != pdf_hash
+#     or st.session_state.vector_store is None
+# ):
+
+#     try:
+
+#         with st.spinner("Creating vector database..."):
+
+#             vector_store = Chroma.from_documents(
+#                 documents=chunks,
+#                 embedding=embeddings,
+#                 collection_name=f"pdf_rag_{uuid.uuid4().hex}"
+#             )
+
+#         st.session_state.vector_store = vector_store
+#         st.session_state.pdf_hash = pdf_hash
+
+#         st.success(
+#             "Vector database created successfully!"
+#         )
+
+#     except Exception:
+
+#         st.error(
+#             "Error while creating vector database."
+#         )
+
+#         st.stop()
+
+# else:
+
+#     vector_store = st.session_state.vector_store
+
+#     st.info("Using cached vector database.")
+
+
+# # =============================
+# # MMR RETRIEVER
+# # =============================
+
+# retriever = vector_store.as_retriever(
+#     search_type="mmr",
+#     search_kwargs={
+#         "k": 5,
+#         "fetch_k": 15,
+#         "lambda_mult": 0.7
+#     }
+# )
+
+
+# # =============================
+# # LLM
+# # =============================
+
+# try:
+
+#     llm = ChatGroq(
+#         model="openai/gpt-oss-20b",
+#         temperature=0
+#     )
+
+# except Exception:
+
+#     st.error("Error while connecting to AI model.")
+#     st.stop()
+
+
+# # =============================
+# # RELEVANCE CHECK
+# # =============================
+
+# relevance_prompt = PromptTemplate.from_template(
+#     """
+# You are a document relevance checker.
+
+# Question:
+# {question}
+
+# Document:
+# {document}
+
+# Check whether the document contains information
+# that can help answer the question.
+
+# Return ONLY:
+# RELEVANT
+# or
+# NOT_RELEVANT
+# """
+# )
+
+
+# relevance_chain = (
+#     relevance_prompt
+#     | llm
+#     | StrOutputParser()
+# )
+
+
+# def filter_relevant_documents(question, documents):
+
+#     relevant_documents = []
+
+#     for document in documents:
+
+#         try:
+
+#             result = relevance_chain.invoke({
+#                 "question": question,
+#                 "document": document.page_content
+#             }).strip().upper()
+
+#             if result == "RELEVANT":
+
+#                 relevant_documents.append(document)
+
+#         except Exception:
+
+#             continue
+
+#     return relevant_documents
+
+
+# # =============================
+# # CONTEXT COMPRESSION
+# # =============================
+
+# compression_prompt = PromptTemplate.from_template(
+#     """
+# You are an extractive document compressor.
+
+# Question:
+# {question}
+
+# Document:
+# {document}
+
+# Instructions:
+# - Extract only exact sentences relevant to the question.
+# - Do not paraphrase.
+# - Do not add new information.
+# - If no relevant information exists, return EMPTY.
+# - Return only the extracted text.
+# """
+# )
+
+
+# compression_chain = (
+#     compression_prompt
+#     | llm
+#     | StrOutputParser()
+# )
+
+
+# def compress_documents(question, documents):
+
+#     compressed_documents = []
+
+#     for document in documents:
+
+#         try:
+
+#             compressed_text = compression_chain.invoke({
+#                 "question": question,
+#                 "document": document.page_content
+#             }).strip()
+
+#             if (
+#                 compressed_text
+#                 and compressed_text.upper() != "EMPTY"
+#             ):
+
+#                 compressed_documents.append(
+#                     Document(
+#                         page_content=compressed_text,
+#                         metadata=document.metadata
+#                     )
+#                 )
+
+#         except Exception:
+
+#             continue
+
+#     return compressed_documents
+
+
+# # =============================
+# # FINAL RAG CHAIN
+# # =============================
+
+# rag_prompt = PromptTemplate.from_template(
+#     """
+# You are a helpful PDF question-answering assistant.
+
+# Answer using ONLY the provided context.
+
+# Conversation History:
+# {history}
+
+# Context:
+# {context}
+
+# Question:
+# {question}
+
+# Rules:
+# - Use only the given context.
+# - Do not invent information.
+# - Keep the answer concise and clear.
+# - If the answer is unavailable, respond exactly:
+
+# Information not available in the uploaded document.
+# """
+# )
+
+
+# rag_chain = (
+#     rag_prompt
+#     | llm
+#     | StrOutputParser()
+# )
+
+
+# # =============================
+# # DISPLAY CHAT HISTORY
+# # =============================
+
+# for message in st.session_state.chat_history:
+
+#     with st.chat_message(message["role"]):
+
+#         st.markdown(message["content"])
+
+
+# # =============================
+# # USER QUESTION
+# # =============================
+
+# question = st.chat_input(
+#     "Ask a question about your PDF..."
+# )
+
+
+# if question:
+
+#     question = question.strip()
+
+#     if not question:
+
+#         st.warning("Please enter a valid question.")
+#         st.stop()
+
+
+#     with st.chat_message("user"):
+
+#         st.markdown(question)
+
+
+#     st.session_state.chat_history.append({
+#         "role": "user",
+#         "content": question
+#     })
+
+
+#     # =============================
+#     # RETRIEVAL
+#     # =============================
+
+#     try:
+
+#         with st.spinner("Searching document..."):
+
+#             retrieved_documents = retriever.invoke(question)
+
+#     except Exception:
+
+#         st.error("Error while searching document.")
+#         st.stop()
+
+
+#     # =============================
+#     # REMOVE DUPLICATES
+#     # =============================
+
+#     unique_documents = []
+#     seen_text = set()
+
+#     for document in retrieved_documents:
+
+#         text = document.page_content.strip()
+
+#         if text not in seen_text:
+
+#             seen_text.add(text)
+#             unique_documents.append(document)
+
+
+#     # =============================
+#     # RELEVANCE FILTERING
+#     # =============================
+
+#     with st.spinner("Checking relevant information..."):
+
+#         relevant_documents = filter_relevant_documents(
+#             question,
+#             unique_documents
+#         )
+
+
+#     # =============================
+#     # CONTEXT COMPRESSION
+#     # =============================
+
+#     with st.spinner("Preparing relevant context..."):
+
+#         compressed_documents = compress_documents(
+#             question,
+#             relevant_documents
+#         )
+
+
+#     # =============================
+#     # CHAT HISTORY
+#     # =============================
+
+#     history = "\n".join(
+#         f'{message["role"]}: {message["content"]}'
+#         for message in st.session_state.chat_history[-6:]
+#     )
+
+
+#     # =============================
+#     # FINAL ANSWER
+#     # =============================
+
+#     unavailable_message = (
+#         "Information not available in the "
+#         "uploaded document."
+#     )
+
+
+#     if not compressed_documents:
+
+#         answer = unavailable_message
+
+#     else:
+
+#         context = "\n\n".join(
+#             document.page_content
+#             for document in compressed_documents
+#         )
+
+#         try:
+
+#             with st.spinner("Generating answer..."):
+
+#                 answer = rag_chain.invoke({
+#                     "context": context,
+#                     "question": question,
+#                     "history": history
+#                 }).strip()
+
+#         except Exception:
+
+#             answer = (
+#                 "Sorry, I could not generate an answer. "
+#                 "Please try again."
+#             )
+
+#             st.error(
+#                 "There was a problem connecting "
+#                 "to the AI model."
+#             )
+
+
+#     # =============================
+#     # DISPLAY ANSWER
+#     # =============================
+
+#     with st.chat_message("assistant"):
+
+#         st.markdown(answer)
+
+
+#     st.session_state.chat_history.append({
+#         "role": "assistant",
+#         "content": answer
+#     })
+
+
+#     # =============================
+#     # SOURCES
+#     # =============================
+
+#     if (
+#         compressed_documents
+#         and answer != unavailable_message
+#         and not answer.startswith("Sorry")
+#     ):
+
+#         with st.expander("📚 Sources"):
+
+#             shown_pages = set()
+
+#             for document in compressed_documents:
+
+#                 page_number = document.metadata.get(
+#                     "page",
+#                     document.metadata.get(
+#                         "page_label",
+#                         "Unknown"
+#                     )
+#                 )
+
+#                 if page_number not in shown_pages:
+
+#                     shown_pages.add(page_number)
+
+#                     if isinstance(page_number, int):
+
+#                         st.write(
+#                             f"**Page:** {page_number + 1}"
+#                         )
+
+#                     else:
+
+#                         st.write(
+#                             f"**Page:** {page_number}"
+#                         )
+
+#                     st.write(document.page_content)
+#                     st.divider()
+
+#           < iam working here for two thing first for wide or fit to screen display and 
+ #          second for giving info from trained knowledge >
+
+
+
 import streamlit as st
 import tempfile
-import uuid
 import hashlib
-from pathlib import Path
+import uuid
+import os
 
+from pathlib import Path
 from dotenv import load_dotenv
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -4340,46 +4953,137 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 
 
-# =============================
-# CONFIGURATION
-# =============================
+# =========================================================
+# 1. PAGE CONFIGURATION
+# =========================================================
 
 st.set_page_config(
     page_title="PDF RAG Chatbot",
-    page_icon="📄"
+    page_icon="📄",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("📄 PDF RAG Chatbot")
+
+# =========================================================
+# 2. LOAD ENVIRONMENT VARIABLES
+# =========================================================
 
 project_folder = Path(__file__).resolve().parent
+
 load_dotenv(project_folder / ".env")
 
 
-# =============================
-# SESSION STATE
-# =============================
+# =========================================================
+# 3. API KEY CONFIGURATION
+# =========================================================
+
+groq_api_key = st.secrets.get(
+    "GROQ_API_KEY",
+    os.getenv("GROQ_API_KEY")
+)
+
+if not groq_api_key:
+    st.error("GROQ_API_KEY is missing. Please configure your API key.")
+    st.stop()
+
+
+# =========================================================
+# 4. SESSION STATE
+# =========================================================
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-
 if "pdf_hash" not in st.session_state:
     st.session_state.pdf_hash = None
-
 
 if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
 
 
-if st.button("🗑️ Clear Chat History"):
+# =========================================================
+# 5. SIDEBAR SETTINGS
+# =========================================================
 
+st.sidebar.title("⚙️ Settings")
+
+
+screen_mode = st.sidebar.radio(
+    "🖥️ Screen Layout",
+    ["Wide Screen", "Fit to Screen"],
+    index=0
+)
+
+
+temperature = st.sidebar.slider(
+    "🌡️ Temperature",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.0,
+    step=0.1
+)
+
+
+allow_general_knowledge = st.sidebar.checkbox(
+    "🧠 Allow General Knowledge Fallback",
+    value=True
+)
+
+
+if st.sidebar.button("🗑️ Clear Chat History"):
     st.session_state.chat_history = []
     st.rerun()
 
 
-# =============================
-# CACHED PDF LOADING + CHUNKING
-# =============================
+# =========================================================
+# 6. CUSTOM SCREEN LAYOUT
+# =========================================================
+
+if screen_mode == "Fit to Screen":
+
+    st.markdown(
+        """
+        <style>
+        .stMainBlockContainer {
+            max-width: 900px;
+            margin: auto;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+else:
+
+    st.markdown(
+        """
+        <style>
+        .stMainBlockContainer {
+            max-width: 100%;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# =========================================================
+# 7. PAGE TITLE
+# =========================================================
+
+st.title("📄 PDF RAG Chatbot")
+
+st.write(
+    "Upload a PDF and ask questions from the document. "
+    "If enabled, general knowledge fallback will be used "
+    "when relevant PDF information is not found."
+)
+
+
+# =========================================================
+# 8. CACHED PDF LOADING AND CHUNKING
+# =========================================================
 
 @st.cache_data
 def load_and_split_pdf(pdf_bytes):
@@ -4395,14 +5099,15 @@ def load_and_split_pdf(pdf_bytes):
     try:
 
         loader = PyPDFLoader(pdf_path)
+
         documents = loader.load()
 
-        text_splitter = RecursiveCharacterTextSplitter(
+        splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=50
         )
 
-        chunks = text_splitter.split_documents(documents)
+        chunks = splitter.split_documents(documents)
 
         return chunks
 
@@ -4411,9 +5116,9 @@ def load_and_split_pdf(pdf_bytes):
         Path(pdf_path).unlink(missing_ok=True)
 
 
-# =============================
-# CACHED EMBEDDING MODEL
-# =============================
+# =========================================================
+# 9. CACHED EMBEDDING MODEL
+# =========================================================
 
 @st.cache_resource
 def get_embeddings():
@@ -4423,30 +5128,31 @@ def get_embeddings():
     )
 
 
-# =============================
-# PDF UPLOAD
-# =============================
+# =========================================================
+# 10. PDF UPLOAD
+# =========================================================
 
 uploaded_file = st.file_uploader(
-    "Upload your PDF",
+    "📤 Upload your PDF",
     type=["pdf"]
 )
 
 
 if uploaded_file is None:
 
-    st.info("Please upload a PDF to start chatting.")
+    st.info("Please upload a PDF to start asking questions.")
+
     st.stop()
 
-
-# =============================
-# PDF PROCESSING
-# =============================
 
 pdf_bytes = uploaded_file.getvalue()
 
 pdf_hash = hashlib.md5(pdf_bytes).hexdigest()
 
+
+# =========================================================
+# 11. LOAD AND SPLIT PDF
+# =========================================================
 
 try:
 
@@ -4454,29 +5160,22 @@ try:
 
         chunks = load_and_split_pdf(pdf_bytes)
 
-    if not chunks:
-
-        st.error("No readable text found in this PDF.")
-        st.stop()
-
     st.success(
-        f"PDF processed successfully! "
-        f"Total chunks: {len(chunks)}"
+        f"PDF processed successfully! Total chunks: {len(chunks)}"
     )
 
 except Exception:
 
     st.error(
-        "Unable to process this PDF. "
-        "Please upload a valid PDF."
+        "Unable to read this PDF. Please upload a valid PDF file."
     )
 
     st.stop()
 
 
-# =============================
-# EMBEDDINGS
-# =============================
+# =========================================================
+# 12. EMBEDDINGS
+# =========================================================
 
 try:
 
@@ -4486,13 +5185,16 @@ try:
 
 except Exception:
 
-    st.error("Error while loading embedding model.")
+    st.error(
+        "Unable to load the embedding model."
+    )
+
     st.stop()
 
 
-# =============================
-# VECTOR DATABASE REUSE
-# =============================
+# =========================================================
+# 13. VECTOR STORE CREATION AND REUSE
+# =========================================================
 
 if (
     st.session_state.pdf_hash != pdf_hash
@@ -4510,16 +5212,16 @@ if (
             )
 
         st.session_state.vector_store = vector_store
+
         st.session_state.pdf_hash = pdf_hash
 
-        st.success(
-            "Vector database created successfully!"
-        )
+        # Clear old chat when a new PDF is uploaded
+        st.session_state.chat_history = []
 
     except Exception:
 
         st.error(
-            "Error while creating vector database."
+            "Unable to create the vector database."
         )
 
         st.stop()
@@ -4528,12 +5230,10 @@ else:
 
     vector_store = st.session_state.vector_store
 
-    st.info("Using cached vector database.")
 
-
-# =============================
-# MMR RETRIEVER
-# =============================
+# =========================================================
+# 14. RETRIEVER
+# =========================================================
 
 retriever = vector_store.as_retriever(
     search_type="mmr",
@@ -4545,45 +5245,49 @@ retriever = vector_store.as_retriever(
 )
 
 
-# =============================
-# LLM
-# =============================
+# =========================================================
+# 15. LLM
+# =========================================================
 
 try:
 
     llm = ChatGroq(
         model="openai/gpt-oss-20b",
-        temperature=0
+        temperature=temperature,
+        api_key=groq_api_key
     )
 
 except Exception:
 
-    st.error("Error while connecting to AI model.")
+    st.error(
+        "Unable to connect to the Groq model."
+    )
+
     st.stop()
 
 
-# =============================
-# RELEVANCE CHECK
-# =============================
+# =========================================================
+# 16. RELEVANCE GRADING PROMPT
+# =========================================================
 
 relevance_prompt = PromptTemplate.from_template(
     """
-You are a document relevance checker.
+    You are a document relevance grader.
 
-Question:
-{question}
+    Decide whether the context contains useful information
+    to answer the question.
 
-Document:
-{document}
+    Return ONLY one of these exact words:
 
-Check whether the document contains information
-that can help answer the question.
+    RELEVANT
+    NOT_RELEVANT
 
-Return ONLY:
-RELEVANT
-or
-NOT_RELEVANT
-"""
+    Question:
+    {question}
+
+    Context:
+    {context}
+    """
 )
 
 
@@ -4594,51 +5298,48 @@ relevance_chain = (
 )
 
 
-def filter_relevant_documents(question, documents):
+def is_relevant(question, document):
 
-    relevant_documents = []
+    try:
 
-    for document in documents:
-
-        try:
-
-            result = relevance_chain.invoke({
+        result = relevance_chain.invoke(
+            {
                 "question": question,
-                "document": document.page_content
-            }).strip().upper()
+                "context": document.page_content
+            }
+        ).strip().upper()
 
-            if result == "RELEVANT":
+        return result == "RELEVANT"
 
-                relevant_documents.append(document)
+    except Exception:
 
-        except Exception:
-
-            continue
-
-    return relevant_documents
+        return False
 
 
-# =============================
-# CONTEXT COMPRESSION
-# =============================
+# =========================================================
+# 17. CONTEXT COMPRESSION PROMPT
+# =========================================================
 
 compression_prompt = PromptTemplate.from_template(
     """
-You are an extractive document compressor.
+    You are a context extraction assistant.
 
-Question:
-{question}
+    Extract ONLY the information from the context
+    that is directly useful for answering the question.
 
-Document:
-{document}
+    Rules:
+    - Do not add outside knowledge.
+    - Do not invent facts.
+    - If useful information is not present, return an empty response.
+    - Keep important facts, numbers, and names.
+    - Keep the answer concise.
 
-Instructions:
-- Extract only exact sentences relevant to the question.
-- Do not paraphrase.
-- Do not add new information.
-- If no relevant information exists, return EMPTY.
-- Return only the extracted text.
-"""
+    Question:
+    {question}
+
+    Context:
+    {context}
+    """
 )
 
 
@@ -4649,65 +5350,59 @@ compression_chain = (
 )
 
 
-def compress_documents(question, documents):
+def compress_document(question, document):
 
-    compressed_documents = []
+    try:
 
-    for document in documents:
-
-        try:
-
-            compressed_text = compression_chain.invoke({
+        compressed_text = compression_chain.invoke(
+            {
                 "question": question,
-                "document": document.page_content
-            }).strip()
+                "context": document.page_content
+            }
+        ).strip()
 
-            if (
-                compressed_text
-                and compressed_text.upper() != "EMPTY"
-            ):
+        if not compressed_text:
+            return None
 
-                compressed_documents.append(
-                    Document(
-                        page_content=compressed_text,
-                        metadata=document.metadata
-                    )
-                )
+        return Document(
+            page_content=compressed_text,
+            metadata=document.metadata
+        )
 
-        except Exception:
+    except Exception:
 
-            continue
-
-    return compressed_documents
+        return None
 
 
-# =============================
-# FINAL RAG CHAIN
-# =============================
+# =========================================================
+# 18. PDF RAG PROMPT
+# =========================================================
 
 rag_prompt = PromptTemplate.from_template(
     """
-You are a helpful PDF question-answering assistant.
+    You are a helpful PDF question-answering assistant.
 
-Answer using ONLY the provided context.
+    Answer the question using ONLY the provided PDF context.
 
-Conversation History:
-{history}
+    Rules:
+    - Do not use outside knowledge.
+    - Do not invent information.
+    - Give a clear and concise answer.
+    - If the context does not contain the answer,
+      respond exactly:
+      Information not available in the provided document.
 
-Context:
-{context}
+    Conversation History:
+    {chat_history}
 
-Question:
-{question}
+    PDF Context:
+    {context}
 
-Rules:
-- Use only the given context.
-- Do not invent information.
-- Keep the answer concise and clear.
-- If the answer is unavailable, respond exactly:
+    Question:
+    {question}
 
-Information not available in the uploaded document.
-"""
+    Answer:
+    """
 )
 
 
@@ -4718,9 +5413,41 @@ rag_chain = (
 )
 
 
-# =============================
-# DISPLAY CHAT HISTORY
-# =============================
+# =========================================================
+# 19. GENERAL KNOWLEDGE PROMPT
+# =========================================================
+
+general_prompt = PromptTemplate.from_template(
+    """
+    You are a helpful AI assistant.
+
+    Answer the user's question using your general
+    pretrained knowledge.
+
+    Rules:
+    - Do not claim that the answer comes from the PDF.
+    - Do not invent facts.
+    - If you are uncertain, clearly mention the uncertainty.
+    - Give a clear and concise answer.
+
+    Question:
+    {question}
+
+    Answer:
+    """
+)
+
+
+general_chain = (
+    general_prompt
+    | llm
+    | StrOutputParser()
+)
+
+
+# =========================================================
+# 20. DISPLAY CHAT HISTORY
+# =========================================================
 
 for message in st.session_state.chat_history:
 
@@ -4728,202 +5455,285 @@ for message in st.session_state.chat_history:
 
         st.markdown(message["content"])
 
+        if message["role"] == "assistant":
 
-# =============================
-# USER QUESTION
-# =============================
+            if "source" in message:
 
-question = st.chat_input(
+                st.caption(message["source"])
+
+
+# =========================================================
+# 21. USER QUESTION
+# =========================================================
+
+user_question = st.chat_input(
     "Ask a question about your PDF..."
 )
 
 
-if question:
+if user_question:
 
-    question = question.strip()
-
-    if not question:
-
-        st.warning("Please enter a valid question.")
-        st.stop()
-
-
+    # Display user message
     with st.chat_message("user"):
 
-        st.markdown(question)
+        st.markdown(user_question)
+
+    st.session_state.chat_history.append(
+        {
+            "role": "user",
+            "content": user_question
+        }
+    )
 
 
-    st.session_state.chat_history.append({
-        "role": "user",
-        "content": question
-    })
-
-
-    # =============================
-    # RETRIEVAL
-    # =============================
+    # =====================================================
+    # 22. RETRIEVE DOCUMENTS
+    # =====================================================
 
     try:
 
-        with st.spinner("Searching document..."):
+        with st.spinner("Searching the PDF..."):
 
-            retrieved_documents = retriever.invoke(question)
+            retrieved_docs = retriever.invoke(
+                user_question
+            )
 
     except Exception:
 
-        st.error("Error while searching document.")
-        st.stop()
+        retrieved_docs = []
 
-
-    # =============================
-    # REMOVE DUPLICATES
-    # =============================
-
-    unique_documents = []
-    seen_text = set()
-
-    for document in retrieved_documents:
-
-        text = document.page_content.strip()
-
-        if text not in seen_text:
-
-            seen_text.add(text)
-            unique_documents.append(document)
-
-
-    # =============================
-    # RELEVANCE FILTERING
-    # =============================
-
-    with st.spinner("Checking relevant information..."):
-
-        relevant_documents = filter_relevant_documents(
-            question,
-            unique_documents
+        st.warning(
+            "Unable to retrieve relevant PDF context."
         )
 
 
-    # =============================
-    # CONTEXT COMPRESSION
-    # =============================
+    # =====================================================
+    # 23. REMOVE DUPLICATE DOCUMENTS
+    # =====================================================
 
-    with st.spinner("Preparing relevant context..."):
+    unique_docs = []
 
-        compressed_documents = compress_documents(
-            question,
-            relevant_documents
+    seen_content = set()
+
+    for doc in retrieved_docs:
+
+        content = doc.page_content.strip()
+
+        if content not in seen_content:
+
+            seen_content.add(content)
+
+            unique_docs.append(doc)
+
+
+    # =====================================================
+    # 24. RELEVANCE FILTERING
+    # =====================================================
+
+    relevant_docs = []
+
+    with st.spinner("Checking document relevance..."):
+
+        for doc in unique_docs:
+
+            if is_relevant(user_question, doc):
+
+                relevant_docs.append(doc)
+
+
+    # =====================================================
+    # 25. CONTEXT COMPRESSION
+    # =====================================================
+
+    compressed_docs = []
+
+    if relevant_docs:
+
+        with st.spinner("Preparing relevant context..."):
+
+            for doc in relevant_docs:
+
+                compressed_doc = compress_document(
+                    user_question,
+                    doc
+                )
+
+                if compressed_doc:
+
+                    compressed_docs.append(compressed_doc)
+
+
+    # =====================================================
+    # 26. CHAT HISTORY TEXT
+    # =====================================================
+
+    history_text = ""
+
+    for message in st.session_state.chat_history[-6:]:
+
+        history_text += (
+            f"{message['role']}: "
+            f"{message['content']}\n"
         )
 
 
-    # =============================
-    # CHAT HISTORY
-    # =============================
+    # =====================================================
+    # 27. ANSWER GENERATION
+    # =====================================================
 
-    history = "\n".join(
-        f'{message["role"]}: {message["content"]}'
-        for message in st.session_state.chat_history[-6:]
-    )
+    answer = ""
 
+    answer_source = ""
 
-    # =============================
-    # FINAL ANSWER
-    # =============================
-
-    unavailable_message = (
-        "Information not available in the "
-        "uploaded document."
-    )
+    source_documents = []
 
 
-    if not compressed_documents:
+    try:
 
-        answer = unavailable_message
+        with st.spinner("Generating answer..."):
 
-    else:
+            if compressed_docs:
 
-        context = "\n\n".join(
-            document.page_content
-            for document in compressed_documents
+                context = "\n\n".join(
+                    doc.page_content
+                    for doc in compressed_docs
+                )
+
+                answer = rag_chain.invoke(
+                    {
+                        "context": context,
+                        "question": user_question,
+                        "chat_history": history_text
+                    }
+                ).strip()
+
+                # If the strict PDF chain cannot answer,
+                # optionally use general knowledge fallback.
+                unavailable_text = (
+                    "information not available"
+                )
+
+                if (
+                    allow_general_knowledge
+                    and unavailable_text in answer.lower()
+                ):
+
+                    answer = general_chain.invoke(
+                        {
+                            "question": user_question
+                        }
+                    ).strip()
+
+                    answer_source = (
+                        "🧠 Source: General Knowledge (LLM)"
+                    )
+
+                else:
+
+                    answer_source = (
+                        "📄 Source: Uploaded PDF"
+                    )
+
+                    source_documents = compressed_docs
+
+            else:
+
+                if allow_general_knowledge:
+
+                    answer = general_chain.invoke(
+                        {
+                            "question": user_question
+                        }
+                    ).strip()
+
+                    answer_source = (
+                        "🧠 Source: General Knowledge (LLM)"
+                    )
+
+                else:
+
+                    answer = (
+                        "Information not available "
+                        "in the provided document."
+                    )
+
+                    answer_source = (
+                        "📄 Source: Uploaded PDF"
+                    )
+
+
+    except Exception:
+
+        answer = (
+            "Sorry, I could not generate an answer. "
+            "Please try again."
         )
 
-        try:
+        answer_source = (
+            "⚠️ Answer generation failed"
+        )
 
-            with st.spinner("Generating answer..."):
-
-                answer = rag_chain.invoke({
-                    "context": context,
-                    "question": question,
-                    "history": history
-                }).strip()
-
-        except Exception:
-
-            answer = (
-                "Sorry, I could not generate an answer. "
-                "Please try again."
-            )
-
-            st.error(
-                "There was a problem connecting "
-                "to the AI model."
-            )
+        st.error(
+            "There was a problem connecting to the AI model."
+        )
 
 
-    # =============================
-    # DISPLAY ANSWER
-    # =============================
+    # =====================================================
+    # 28. DISPLAY ASSISTANT RESPONSE
+    # =====================================================
 
     with st.chat_message("assistant"):
 
         st.markdown(answer)
 
-
-    st.session_state.chat_history.append({
-        "role": "assistant",
-        "content": answer
-    })
+        st.caption(answer_source)
 
 
-    # =============================
-    # SOURCES
-    # =============================
+        # =================================================
+        # 29. DISPLAY PDF SOURCES
+        # =================================================
 
-    if (
-        compressed_documents
-        and answer != unavailable_message
-        and not answer.startswith("Sorry")
-    ):
+        if source_documents:
 
-        with st.expander("📚 Sources"):
+            st.markdown("#### 📚 PDF Sources")
 
-            shown_pages = set()
+            displayed_sources = set()
 
-            for document in compressed_documents:
+            for doc in source_documents:
 
-                page_number = document.metadata.get(
+                page_number = doc.metadata.get(
                     "page",
-                    document.metadata.get(
-                        "page_label",
-                        "Unknown"
-                    )
+                    None
                 )
 
-                if page_number not in shown_pages:
+                if page_number is not None:
 
-                    shown_pages.add(page_number)
+                    page_number = int(page_number) + 1
 
-                    if isinstance(page_number, int):
+                    source_label = (
+                        f"Page {page_number}"
+                    )
 
-                        st.write(
-                            f"**Page:** {page_number + 1}"
-                        )
+                else:
 
-                    else:
+                    source_label = "Page number unavailable"
 
-                        st.write(
-                            f"**Page:** {page_number}"
-                        )
 
-                    st.write(document.page_content)
-                    st.divider()
+                if source_label not in displayed_sources:
+
+                    displayed_sources.add(source_label)
+
+                    st.write(f"📄 {source_label}")
+
+
+    # =====================================================
+    # 30. SAVE ASSISTANT MESSAGE
+    # =====================================================
+
+    st.session_state.chat_history.append(
+        {
+            "role": "assistant",
+            "content": answer,
+            "source": answer_source
+        }
+    )
