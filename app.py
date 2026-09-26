@@ -5742,907 +5742,2064 @@
 
 #               < Advance rag >.                 #
 
-import os
-import re
-import hashlib
-import tempfile
-from pathlib import Path
+# import os
+# import re
+# import hashlib
+# import tempfile
+# from pathlib import Path
 
+# import streamlit as st
+# from dotenv import load_dotenv
+
+# from langchain_community.document_loaders import PyPDFLoader
+# from langchain_text_splitters import RecursiveCharacterTextSplitter
+# from langchain_huggingface import HuggingFaceEmbeddings
+# from langchain_chroma import Chroma
+
+# from langchain_groq import ChatGroq
+# from langchain_core.documents import Document
+# from langchain_core.prompts import PromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+
+
+# # ============================================================
+# # 1. PAGE CONFIGURATION
+# # ============================================================
+
+# st.set_page_config(
+#     page_title="Advanced PDF RAG Chatbot",
+#     page_icon="📄",
+#     layout="wide",
+#     initial_sidebar_state="expanded"
+# )
+
+# st.title("📄 Advanced PDF RAG Chatbot")
+# st.caption(
+#     "Multi-Query | Parent-Child Retrieval | Reranking | "
+#     "Compression | Answer Verification"
+# )
+
+
+# # ============================================================
+# # 2. LOAD ENVIRONMENT VARIABLES
+# # ============================================================
+
+# PROJECT_FOLDER = Path(__file__).resolve().parent
+# load_dotenv(PROJECT_FOLDER / ".env")
+
+# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# if not GROQ_API_KEY:
+#     st.error("GROQ_API_KEY is missing in the .env file.")
+#     st.stop()
+
+
+# # ============================================================
+# # 3. SESSION STATE
+# # ============================================================
+
+# if "chat_history" not in st.session_state:
+#     st.session_state.chat_history = []
+
+# if "pdf_hash" not in st.session_state:
+#     st.session_state.pdf_hash = None
+
+# if "vector_store" not in st.session_state:
+#     st.session_state.vector_store = None
+
+# if "parent_store" not in st.session_state:
+#     st.session_state.parent_store = {}
+
+# if "child_chunks" not in st.session_state:
+#     st.session_state.child_chunks = []
+
+# if "bm25_chunks" not in st.session_state:
+#     st.session_state.bm25_chunks = []
+
+
+# # ============================================================
+# # 4. CACHED EMBEDDINGS
+# # ============================================================
+
+# @st.cache_resource
+# def get_embeddings():
+#     return HuggingFaceEmbeddings(
+#         model_name="sentence-transformers/all-MiniLM-L6-v2"
+#     )
+
+
+# # ============================================================
+# # 5. LOAD PDF AND CREATE PARENT CHUNKS
+# # ============================================================
+
+# @st.cache_data(show_spinner=False)
+# def load_pdf_and_create_parent_chunks(pdf_bytes):
+#     temp_path = None
+
+#     try:
+#         with tempfile.NamedTemporaryFile(
+#             delete=False,
+#             suffix=".pdf"
+#         ) as temp_file:
+#             temp_file.write(pdf_bytes)
+#             temp_path = temp_file.name
+
+#         loader = PyPDFLoader(temp_path)
+#         documents = loader.load()
+
+#         parent_splitter = RecursiveCharacterTextSplitter(
+#             chunk_size=1000,
+#             chunk_overlap=100,
+#             separators=[
+#                 "\n\n",
+#                 "\n",
+#                 ". ",
+#                 " ",
+#                 ""
+#             ]
+#         )
+
+#         parent_chunks = parent_splitter.split_documents(
+#             documents
+#         )
+
+#         return parent_chunks
+
+#     finally:
+#         if temp_path and os.path.exists(temp_path):
+#             os.remove(temp_path)
+
+
+# # ============================================================
+# # 6. CREATE CHILD CHUNKS AND PARENT STORE
+# # ============================================================
+
+# def create_parent_child_chunks(parent_chunks):
+#     child_splitter = RecursiveCharacterTextSplitter(
+#         chunk_size=250,
+#         chunk_overlap=50,
+#         separators=[
+#             "\n\n",
+#             "\n",
+#             ". ",
+#             " ",
+#             ""
+#         ]
+#     )
+
+#     child_chunks = []
+#     parent_store = {}
+
+#     for parent_id, parent_doc in enumerate(parent_chunks):
+#         parent_key = str(parent_id)
+
+#         parent_doc.metadata["parent_id"] = parent_key
+#         parent_store[parent_key] = parent_doc
+
+#         children = child_splitter.split_documents(
+#             [parent_doc]
+#         )
+
+#         for child_index, child_doc in enumerate(children):
+#             child_doc.metadata["parent_id"] = parent_key
+#             child_doc.metadata["child_id"] = (
+#                 f"{parent_key}_{child_index}"
+#             )
+
+#             child_chunks.append(child_doc)
+
+#     return child_chunks, parent_store
+
+
+# # ============================================================
+# # 7. CREATE VECTOR STORE
+# # ============================================================
+
+# def create_vector_store(child_chunks, embeddings, pdf_hash):
+#     collection_name = (
+#         "pdf_rag_" + pdf_hash[:16]
+#     )
+
+#     vector_store = Chroma.from_documents(
+#         documents=child_chunks,
+#         embedding=embeddings,
+#         collection_name=collection_name
+#     )
+
+#     return vector_store
+
+
+# # ============================================================
+# # 8. INITIALIZE LLM
+# # ============================================================
+
+# @st.cache_resource
+# def get_llm():
+#     return ChatGroq(
+#         model="openai/gpt-oss-20b",
+#         temperature=0
+#     )
+
+
+# # ============================================================
+# # 9. MULTI-QUERY RETRIEVAL
+# # ============================================================
+
+# def generate_multi_queries(question, llm):
+#     multi_query_prompt = PromptTemplate.from_template(
+#         """
+#         Generate three different search queries for the
+#         user's question.
+
+#         Rules:
+#         - Preserve the original meaning.
+#         - Use different wording.
+#         - Return only one query per line.
+#         - Do not add numbering.
+#         - Do not add explanations.
+
+#         User question:
+#         {question}
+#         """
+#     )
+
+#     query_chain = (
+#         multi_query_prompt
+#         | llm
+#         | StrOutputParser()
+#     )
+
+#     response = query_chain.invoke({
+#         "question": question
+#     })
+
+#     queries = []
+
+#     for line in response.splitlines():
+#         query = re.sub(
+#             r"^\s*[-*]?\s*\d*[\).\:-]?\s*",
+#             "",
+#             line
+#         ).strip()
+
+#         if query:
+#             queries.append(query)
+
+#     # Include the original question
+#     all_queries = [question]
+
+#     for query in queries:
+#         if query.lower() not in {
+#             item.lower() for item in all_queries
+#         }:
+#             all_queries.append(query)
+
+#     return all_queries[:4]
+
+
+# def multi_query_retrieval(
+#     question,
+#     vector_store,
+#     parent_store,
+#     llm,
+#     top_k=3
+# ):
+#     queries = generate_multi_queries(
+#         question,
+#         llm
+#     )
+
+#     retrieved_parents = []
+#     seen_parent_ids = set()
+
+#     for query in queries:
+#         child_results = vector_store.similarity_search(
+#             query,
+#             k=top_k
+#         )
+
+#         for child_doc in child_results:
+#             parent_id = child_doc.metadata.get(
+#                 "parent_id"
+#             )
+
+#             if (
+#                 parent_id is not None
+#                 and parent_id in parent_store
+#                 and parent_id not in seen_parent_ids
+#             ):
+#                 retrieved_parents.append(
+#                     parent_store[parent_id]
+#                 )
+
+#                 seen_parent_ids.add(parent_id)
+
+#     return retrieved_parents, queries
+
+
+# # ============================================================
+# # 10. LLM-BASED RERANKING
+# # ============================================================
+
+# rerank_prompt = PromptTemplate.from_template(
+#     """
+#     You are a document relevance evaluator.
+
+#     Give a relevance score from 0 to 10.
+#     The score should represent how useful the document
+#     is for answering the question.
+
+#     Rules:
+#     - Return only a number.
+#     - Do not provide an explanation.
+#     - Use 0 if the document is not relevant.
+
+#     Question:
+#     {question}
+
+#     Document:
+#     {document}
+
+#     Relevance score:
+#     """
+# )
+
+
+# def rerank_documents(
+#     question,
+#     documents,
+#     llm,
+#     top_k=4
+# ):
+#     rerank_chain = (
+#         rerank_prompt
+#         | llm
+#         | StrOutputParser()
+#     )
+
+#     scored_documents = []
+
+#     for doc in documents:
+#         try:
+#             response = rerank_chain.invoke({
+#                 "question": question,
+#                 "document": doc.page_content
+#             })
+
+#             match = re.search(
+#                 r"\b(?:10|[0-9](?:\.\d+)?)\b",
+#                 response.strip()
+#             )
+
+#             score = float(match.group()) if match else 0
+
+#             score = max(0, min(10, score))
+
+#         except Exception:
+#             score = 0
+
+#         scored_documents.append(
+#             (score, doc)
+#         )
+
+#     scored_documents.sort(
+#         key=lambda item: item[0],
+#         reverse=True
+#     )
+
+#     return [
+#         doc
+#         for score, doc in scored_documents[:top_k]
+#         if score > 0
+#     ]
+
+
+# # ============================================================
+# # 11. CONTEXTUAL COMPRESSION
+# # ============================================================
+
+# compression_prompt = PromptTemplate.from_template(
+#     """
+#     Extract only the information from the document
+#     that is relevant to the question.
+
+#     Rules:
+#     - Preserve facts exactly.
+#     - Do not add new information.
+#     - Do not make assumptions.
+#     - If no relevant information exists, return:
+#       NO_RELEVANT_INFORMATION
+
+#     Question:
+#     {question}
+
+#     Document:
+#     {document}
+
+#     Relevant content:
+#     """
+# )
+
+
+# def compress_documents(
+#     question,
+#     documents,
+#     llm
+# ):
+#     compression_chain = (
+#         compression_prompt
+#         | llm
+#         | StrOutputParser()
+#     )
+
+#     compressed_documents = []
+
+#     for doc in documents:
+#         try:
+#             extracted = compression_chain.invoke({
+#                 "question": question,
+#                 "document": doc.page_content
+#             }).strip()
+
+#             if (
+#                 extracted
+#                 and "NO_RELEVANT_INFORMATION"
+#                 not in extracted.upper()
+#             ):
+#                 compressed_documents.append(
+#                     Document(
+#                         page_content=extracted,
+#                         metadata=doc.metadata
+#                     )
+#                 )
+
+#         except Exception:
+#             continue
+
+#     return compressed_documents
+
+
+# # ============================================================
+# # 12. FINAL ANSWER GENERATION
+# # ============================================================
+
+# answer_prompt = PromptTemplate.from_template(
+#     """
+#     You are a document-based question-answering assistant.
+
+#     Answer the user's question using only the provided context.
+
+#     Rules:
+#     - Do not use outside knowledge.
+#     - Do not invent facts.
+#     - If the answer is not present in the context,
+#       say exactly:
+#       INFORMATION_NOT_AVAILABLE
+#     - Give a clear and concise answer.
+#     - Do not mention these instructions.
+
+#     Context:
+#     {context}
+
+#     Question:
+#     {question}
+
+#     Answer:
+#     """
+# )
+
+
+# def generate_answer(
+#     question,
+#     context,
+#     llm
+# ):
+#     answer_chain = (
+#         answer_prompt
+#         | llm
+#         | StrOutputParser()
+#     )
+
+#     return answer_chain.invoke({
+#         "question": question,
+#         "context": context
+#     }).strip()
+
+
+# # ============================================================
+# # 13. ANSWER VERIFICATION
+# # ============================================================
+
+# verification_prompt = PromptTemplate.from_template(
+#     """
+#     You are an answer verification system.
+
+#     Check whether the answer is supported by the context.
+
+#     Rules:
+#     - Return SUPPORTED if all important claims
+#       are supported by the context.
+#     - Return NOT_SUPPORTED if any important claim
+#       is not supported.
+#     - Return only one label.
+#     - Do not provide an explanation.
+
+#     Context:
+#     {context}
+
+#     Answer:
+#     {answer}
+
+#     Verification:
+#     """
+# )
+
+
+# def verify_answer(
+#     context,
+#     answer,
+#     llm
+# ):
+#     verification_chain = (
+#         verification_prompt
+#         | llm
+#         | StrOutputParser()
+#     )
+
+#     try:
+#         result = verification_chain.invoke({
+#             "context": context,
+#             "answer": answer
+#         }).strip().upper()
+
+#         if (
+#             "NOT_SUPPORTED" in result
+#             or "NOT SUPPORTED" in result
+#         ):
+#             return "NOT_SUPPORTED"
+
+#         if "SUPPORTED" in result:
+#             return "SUPPORTED"
+
+#     except Exception:
+#         pass
+
+#     return "NOT_SUPPORTED"
+
+
+# # ============================================================
+# # 14. FORMAT SOURCE INFORMATION
+# # ============================================================
+
+# def get_source_text(documents):
+#     sources = []
+
+#     for doc in documents:
+#         page = doc.metadata.get("page")
+
+#         if page is not None:
+#             page_number = page + 1
+#             source = f"Page {page_number}"
+#         else:
+#             source = "Page information unavailable"
+
+#         if source not in sources:
+#             sources.append(source)
+
+#     return sources
+
+
+# # ============================================================
+# # 15. DISPLAY CHAT HISTORY
+# # ============================================================
+
+# for message in st.session_state.chat_history:
+#     with st.chat_message(message["role"]):
+#         st.markdown(message["content"])
+
+
+# # ============================================================
+# # 16. SIDEBAR
+# # ============================================================
+
+# with st.sidebar:
+#     st.header("⚙️ Settings")
+
+#     retrieval_k = st.slider(
+#         "Initial retrieval count",
+#         min_value=2,
+#         max_value=8,
+#         value=4
+#     )
+
+#     rerank_k = st.slider(
+#         "Documents after reranking",
+#         min_value=1,
+#         max_value=5,
+#         value=3
+#     )
+
+#     enable_verification = st.checkbox(
+#         "Enable answer verification",
+#         value=True
+#     )
+
+#     if st.button("🗑️ Clear Chat"):
+#         st.session_state.chat_history = []
+#         st.rerun()
+
+
+# # ============================================================
+# # 17. PDF UPLOAD
+# # ============================================================
+
+# uploaded_file = st.file_uploader(
+#     "Upload a PDF document",
+#     type=["pdf"]
+# )
+
+# if uploaded_file is None:
+#     st.info("Please upload a PDF to start chatting.")
+#     st.stop()
+
+
+# pdf_bytes = uploaded_file.getvalue()
+
+# if not pdf_bytes:
+#     st.error("The uploaded PDF is empty.")
+#     st.stop()
+
+
+# current_pdf_hash = hashlib.md5(
+#     pdf_bytes
+# ).hexdigest()
+
+
+# # ============================================================
+# # 18. PROCESS NEW PDF
+# # ============================================================
+
+# if (
+#     st.session_state.pdf_hash != current_pdf_hash
+#     or st.session_state.vector_store is None
+# ):
+#     with st.spinner(
+#         "Loading PDF and creating vector database..."
+#     ):
+#         try:
+#             parent_chunks = load_pdf_and_create_parent_chunks(
+#                 pdf_bytes
+#             )
+
+#             if not parent_chunks:
+#                 st.error(
+#                     "No readable text was found in the PDF."
+#                 )
+#                 st.stop()
+
+#             child_chunks, parent_store = (
+#                 create_parent_child_chunks(
+#                     parent_chunks
+#                 )
+#             )
+
+#             embeddings = get_embeddings()
+
+#             vector_store = create_vector_store(
+#                 child_chunks,
+#                 embeddings,
+#                 current_pdf_hash
+#             )
+
+#             st.session_state.pdf_hash = current_pdf_hash
+#             st.session_state.vector_store = vector_store
+#             st.session_state.parent_store = parent_store
+#             st.session_state.child_chunks = child_chunks
+#             st.session_state.chat_history = []
+
+#             st.success(
+#                 f"PDF processed successfully. "
+#                 f"Parents: {len(parent_store)}, "
+#                 f"Children: {len(child_chunks)}"
+#             )
+
+#         except Exception as error:
+#             st.error(
+#                 f"PDF processing failed: {error}"
+#             )
+#             st.stop()
+
+
+# # ============================================================
+# # 19. INITIALIZE LLM
+# # ============================================================
+
+# try:
+#     llm = get_llm()
+
+# except Exception as error:
+#     st.error(
+#         f"LLM initialization failed: {error}"
+#     )
+#     st.stop()
+
+
+# # ============================================================
+# # 20. USER QUESTION
+# # ============================================================
+
+# question = st.chat_input(
+#     "Ask a question about your PDF..."
+# )
+
+# if question:
+#     question = question.strip()
+
+#     if not question:
+#         st.warning("Please enter a valid question.")
+#         st.stop()
+
+#     with st.chat_message("user"):
+#         st.markdown(question)
+
+#     st.session_state.chat_history.append({
+#         "role": "user",
+#         "content": question
+#     })
+
+#     try:
+#         with st.spinner(
+#             "Running advanced retrieval..."
+#         ):
+#             # --------------------------------------------
+#             # Step A: Multi-Query + Parent Retrieval
+#             # --------------------------------------------
+
+#             retrieved_docs, generated_queries = (
+#                 multi_query_retrieval(
+#                     question=question,
+#                     vector_store=st.session_state.vector_store,
+#                     parent_store=st.session_state.parent_store,
+#                     llm=llm,
+#                     top_k=retrieval_k
+#                 )
+#             )
+
+#             if not retrieved_docs:
+#                 answer = (
+#                     "INFORMATION_NOT_AVAILABLE"
+#                 )
+#                 verification_result = "NOT_SUPPORTED"
+#                 compressed_docs = []
+
+#             else:
+#                 # ----------------------------------------
+#                 # Step B: Reranking
+#                 # ----------------------------------------
+
+#                 reranked_docs = rerank_documents(
+#                     question=question,
+#                     documents=retrieved_docs,
+#                     llm=llm,
+#                     top_k=rerank_k
+#                 )
+
+#                 if not reranked_docs:
+#                     answer = (
+#                         "INFORMATION_NOT_AVAILABLE"
+#                     )
+#                     verification_result = "NOT_SUPPORTED"
+#                     compressed_docs = []
+
+#                 else:
+#                     # ------------------------------------
+#                     # Step C: Contextual Compression
+#                     # ------------------------------------
+
+#                     compressed_docs = compress_documents(
+#                         question=question,
+#                         documents=reranked_docs,
+#                         llm=llm
+#                     )
+
+#                     if not compressed_docs:
+#                         answer = (
+#                             "INFORMATION_NOT_AVAILABLE"
+#                         )
+#                         verification_result = "NOT_SUPPORTED"
+
+#                     else:
+#                         # --------------------------------
+#                         # Step D: Create Final Context
+#                         # --------------------------------
+
+#                         context = "\n\n".join(
+#                             doc.page_content
+#                             for doc in compressed_docs
+#                         )
+
+#                         # --------------------------------
+#                         # Step E: Generate Answer
+#                         # --------------------------------
+
+#                         answer = generate_answer(
+#                             question=question,
+#                             context=context,
+#                             llm=llm
+#                         )
+
+#                         # --------------------------------
+#                         # Step F: Verify Answer
+#                         # --------------------------------
+
+#                         if (
+#                             enable_verification
+#                             and answer
+#                             != "INFORMATION_NOT_AVAILABLE"
+#                         ):
+#                             verification_result = (
+#                                 verify_answer(
+#                                     context=context,
+#                                     answer=answer,
+#                                     llm=llm
+#                                 )
+#                             )
+#                         else:
+#                             verification_result = (
+#                                 "NOT_SUPPORTED"
+#                             )
+
+#                         # --------------------------------
+#                         # Step G: Safe Fallback
+#                         # --------------------------------
+
+#                         if (
+#                             answer
+#                             == "INFORMATION_NOT_AVAILABLE"
+#                             or verification_result
+#                             != "SUPPORTED"
+#                         ):
+#                             answer = (
+#                                 "I could not verify a reliable "
+#                                 "answer from the uploaded PDF."
+#                             )
+
+#         # ====================================================
+#         # 21. DISPLAY FINAL ANSWER
+#         # ====================================================
+
+#         with st.chat_message("assistant"):
+#             st.markdown(answer)
+
+#             if enable_verification:
+#                 if verification_result == "SUPPORTED":
+#                     st.success(
+#                         "Answer verification: SUPPORTED"
+#                     )
+#                 else:
+#                     st.warning(
+#                         "Answer verification: "
+#                         "NOT SUPPORTED / UNVERIFIED"
+#                     )
+
+#             source_documents = (
+#                 compressed_docs
+#                 if compressed_docs
+#                 else []
+#             )
+
+#             sources = get_source_text(
+#                 source_documents
+#             )
+
+#             if sources:
+#                 with st.expander("📚 Sources"):
+#                     for source in sources:
+#                         st.write(f"- {source}")
+
+#             with st.expander("🔍 Retrieval Details"):
+#                 st.write("Generated search queries:")
+#                 for query in generated_queries:
+#                     st.write(f"- {query}")
+
+#                 st.write(
+#                     f"Retrieved parent documents: "
+#                     f"{len(retrieved_docs)}"
+#                 )
+
+#                 st.write(
+#                     f"Compressed documents: "
+#                     f"{len(compressed_docs)}"
+#                 )
+
+#     except Exception as error:
+#         answer = (
+#             "An error occurred while processing your question."
+#         )
+
+#         with st.chat_message("assistant"):
+#             st.error(
+#                 f"{answer}\n\nDetails: {error}"
+#             )
+
+#     st.session_state.chat_history.append({
+#         "role": "assistant",
+#         "content": answer
+#     })
+
+
+
+#               < image -QUERY RAG >.                 #
+# import base64
+# import os
+
+# import streamlit as st
+# from dotenv import load_dotenv
+# from groq import Groq
+
+# load_dotenv()
+
+# st.set_page_config(
+#     page_title="Multimodal RAG",
+#     page_icon="📊"
+# )
+
+# st.title("📄 Multimodal RAG")
+# st.write("Upload a chart image and extract information using Vision LLM.")
+
+
+# # -----------------------------
+# # Groq Client
+# # -----------------------------
+
+# client = Groq(
+#     api_key=os.getenv("GROQ_API_KEY")
+# )
+
+
+# # -----------------------------
+# # Image Upload
+# # -----------------------------
+
+# uploaded_file = st.file_uploader(
+#     "Upload a chart image",
+#     type=["png", "jpg", "jpeg"]
+# )
+
+
+# if uploaded_file:
+
+#     # Display image
+#     st.image(
+#         uploaded_file,
+#         caption="Uploaded Chart",
+#         use_container_width=True
+#     )
+
+#     if st.button("🔍 Analyze Chart"):
+
+#         with st.spinner("Analyzing chart..."):
+
+#             # Read image
+#             image_bytes = uploaded_file.read()
+
+#             # Convert image → Base64
+#             base64_image = base64.b64encode(
+#                 image_bytes
+#             ).decode("utf-8")
+
+#             # Vision LLM
+#             response = client.chat.completions.create(
+#                 model="qwen/qwen3.8-27b",
+#                 max_tokens=400,
+#                 messages=[
+#                     {
+#                         "role": "user",
+#                         "content": [
+#                             {
+#                                 "type": "text",
+#                                 "text": """
+#                                 Analyze this chart.
+
+#                                 Extract:
+#                                 1. All labels
+#                                 2. All values
+#                                 3. Highest value
+#                                 4. Lowest value
+#                                 5. Overall trend
+
+#                                 Do not invent any information.
+#                                 """
+#                             },
+#                             {
+#                                 "type": "image_url",
+#                                 "image_url": {
+#                                     "url": (
+#                                         f"data:image/png;base64,"
+#                                         f"{base64_image}"
+#                                     )
+#                                 }
+#                             }
+#                         ]
+#                     }
+#                 ]
+#             )
+
+#             description = response.choices[0].message.content
+
+#         st.subheader("📊 Chart Information")
+
+#         st.write(description)
+
+
+#               < final project >                   #
+
+
+
+# import base64
+# import os
+# import tempfile
+
+# import fitz
+# import streamlit as st
+# from dotenv import load_dotenv
+# from groq import Groq
+# from langchain_community.document_loaders import PyPDFLoader
+
+
+# # =========================
+# # ENVIRONMENT
+# # =========================
+
+# load_dotenv()
+
+# client = Groq(
+#     api_key=os.getenv("GROQ_API_KEY")
+# )
+
+# VISION_MODEL = "qwen/qwen3.8-27b"
+
+
+# # =========================
+# # PAGE CONFIG
+# # =========================
+
+# st.set_page_config(
+#     page_title="Multimodal PDF RAG",
+#     page_icon="📄",
+#     layout="wide"
+# )
+
+
+# # =========================
+# # SIDEBAR
+# # =========================
+
+# st.sidebar.title("⚙️ Settings")
+
+# screen_layout = st.sidebar.selectbox(
+#     "🖥️ Screen Layout",
+#     ["Wide screen", "Fit to screen"]
+# )
+
+# answer_mode = st.sidebar.selectbox(
+#     "🧠 Answer Mode",
+#     [
+#         "PDF + General Knowledge",
+#         "PDF Only"
+#     ]
+# )
+
+
+# # =========================
+# # SCREEN WIDTH
+# # =========================
+
+# if screen_layout == "Fit to screen":
+#     st.markdown(
+#         """
+#         <style>
+#         .block-container {
+#             max-width: 900px;
+#             margin: auto;
+#         }
+#         </style>
+#         """,
+#         unsafe_allow_html=True
+#     )
+
+
+# # =========================
+# # TITLE
+# # =========================
+
+# st.title("📄 Multimodal PDF RAG")
+
+# st.write(
+#     "Upload a PDF and ask questions about its "
+#     "text, tables, charts, graphs, diagrams and images."
+# )
+
+
+# # =========================
+# # PDF UPLOAD
+# # =========================
+
+# uploaded_file = st.file_uploader(
+#     "📤 Upload your PDF",
+#     type=["pdf"]
+# )
+
+
+# if uploaded_file:
+
+#     # =========================
+#     # SAVE PDF TEMPORARILY
+#     # =========================
+
+#     with tempfile.NamedTemporaryFile(
+#         delete=False,
+#         suffix=".pdf"
+#     ) as temp_file:
+
+#         temp_file.write(
+#             uploaded_file.getvalue()
+#         )
+
+#         pdf_path = temp_file.name
+
+
+#     # =========================
+#     # LOAD PDF TEXT
+#     # =========================
+
+#     try:
+
+#         loader = PyPDFLoader(pdf_path)
+
+#         documents = loader.load()
+
+#     except Exception as e:
+
+#         st.error(
+#             f"❌ PDF load nahi ho payi: {e}"
+#         )
+
+#         st.stop()
+
+
+#     # =========================
+#     # CONVERT PDF PAGES TO IMAGES
+#     # =========================
+
+#     try:
+
+#         pdf = fitz.open(pdf_path)
+
+#         pages = []
+
+#         for page_number, page in enumerate(pdf):
+
+#             matrix = fitz.Matrix(
+#                 1.5,
+#                 1.5
+#             )
+
+#             pixmap = page.get_pixmap(
+#                 matrix=matrix,
+#                 alpha=False
+#             )
+
+#             image_bytes = pixmap.tobytes(
+#                 "png"
+#             )
+
+#             pages.append(
+#                 {
+#                     "page_number": page_number + 1,
+#                     "image": image_bytes,
+#                     "text": documents[
+#                         page_number
+#                     ].page_content
+#                 }
+#             )
+
+#         pdf.close()
+
+#     except Exception as e:
+
+#         st.error(
+#             f"❌ PDF pages process nahi ho paaye: {e}"
+#         )
+
+#         st.stop()
+
+
+#     st.success(
+#         f"✅ PDF loaded successfully — {len(pages)} pages"
+#     )
+
+
+#     # =========================
+#     # QUESTION FORM
+#     # =========================
+#     # Enter OR Ask button dono kaam karenge
+
+#     with st.form("question_form"):
+
+#         question = st.text_input(
+#             "❓ Ask anything about your PDF",
+#             placeholder="Type your question and press Enter..."
+#         )
+
+#         ask = st.form_submit_button(
+#             "🔍 Ask"
+#         )
+
+
+#     # =========================
+#     # PROCESS QUESTION
+#     # =========================
+
+#     if ask and question.strip():
+
+#         with st.spinner(
+#             "🔎 Searching the PDF and analyzing relevant content..."
+#         ):
+
+#             # =========================
+#             # FIND RELEVANT PAGES
+#             # =========================
+
+#             question_words = set(
+#                 question.lower().split()
+#             )
+
+#             scored_pages = []
+
+#             for page in pages:
+
+#                 page_text = page["text"].lower()
+
+#                 score = sum(
+#                     1
+#                     for word in question_words
+#                     if len(word) > 2
+#                     and word in page_text
+#                 )
+
+#                 scored_pages.append(
+#                     (
+#                         score,
+#                         page
+#                     )
+#                 )
+
+
+#             # Highest matching pages first
+
+#             scored_pages.sort(
+#                 key=lambda x: x[0],
+#                 reverse=True
+#             )
+
+
+#             # Pages having at least one match
+
+#             relevant_pages = [
+#                 page
+#                 for score, page in scored_pages
+#                 if score > 0
+#             ]
+
+
+#             # If no text match is found,
+#             # use first few pages so that
+#             # visual content can still be inspected.
+
+#             if not relevant_pages:
+
+#                 relevant_pages = pages
+
+
+#             # Keep Vision request manageable
+
+#             relevant_pages = relevant_pages[:3]
+
+
+#             # =========================
+#             # ANSWER MODE
+#             # =========================
+
+#             if answer_mode == "PDF Only":
+
+#                 knowledge_instruction = """
+# Use ONLY information available in the PDF.
+
+# If the answer cannot be found in the PDF,
+# say exactly:
+
+# "Information not found in the PDF."
+
+# Do not use outside knowledge.
+# Do not invent information.
+# """
+
+#             else:
+
+#                 knowledge_instruction = """
+# Use information from the PDF whenever available.
+
+# You may also use your general pretrained knowledge
+# when the required information is not available in
+# the PDF.
+
+# Clearly distinguish PDF information from general
+# knowledge when necessary.
+
+# Do not invent information.
+# """
+
+
+#             # =========================
+#             # VISION PROMPT
+#             # =========================
+
+#             content = [
+#                 {
+#                     "type": "text",
+#                     "text": f"""
+# You are answering a question about a PDF.
+
+# The PDF may contain:
+
+# - normal text
+# - tables
+# - charts
+# - graphs
+# - diagrams
+# - images
+
+# Carefully inspect BOTH:
+
+# 1. Extracted PDF text
+# 2. Visual content of the PDF pages
+
+# {knowledge_instruction}
+
+# User question:
+
+# {question}
+
+# Give a clear and direct answer.
+
+# If the answer depends on a chart, table,
+# graph, diagram or image, read the visual
+# content carefully.
+
+# Do not guess values that cannot be read.
+# """
+#                 }
+#             ]
+
+
+#             # =========================
+#             # ADD RELEVANT PAGES
+#             # =========================
+
+#             for page in relevant_pages:
+
+#                 base64_image = base64.b64encode(
+#                     page["image"]
+#                 ).decode("utf-8")
+
+
+#                 # Add page text
+
+#                 content.append(
+#                     {
+#                         "type": "text",
+#                         "text": f"""
+# ========================
+# PDF PAGE {page['page_number']}
+# ========================
+
+# Extracted text:
+
+# {page['text'][:5000]}
+# """
+#                     }
+#                 )
+
+
+#                 # Add page image
+
+#                 content.append(
+#                     {
+#                         "type": "image_url",
+#                         "image_url": {
+#                             "url":
+#                             f"data:image/png;base64,{base64_image}"
+#                         }
+#                     }
+#                 )
+
+
+#             # =========================
+#             # CALL VISION LLM
+#             # =========================
+
+#             try:
+
+#                 response = client.chat.completions.create(
+#                     model=VISION_MODEL,
+#                     max_completion_tokens=500,
+#                     reasoning_effort="none",
+#                     messages=[
+#                         {
+#                             "role": "user",
+#                             "content": content
+#                         }
+#                     ]
+#                 )
+
+
+#                 answer = (
+#                     response
+#                     .choices[0]
+#                     .message
+#                     .content
+#                 )
+
+
+#             except Exception as e:
+
+#                 st.error(
+#                     f"❌ AI response error: {e}"
+#                 )
+
+#                 st.stop()
+
+
+#         # =========================
+#         # ANSWER
+#         # =========================
+
+#         st.subheader("🤖 Answer")
+
+#         st.write(answer)
+
+
+#         # =========================
+#         # SOURCES
+#         # =========================
+
+#         st.subheader("📚 Sources")
+
+#         for page in relevant_pages:
+
+#             st.write(
+#                 f"📄 Page {page['page_number']}"
+#             )
+
+
+#     elif ask and not question.strip():
+
+#         st.warning(
+#             "⚠️ Please enter a question."
+#         )
+
+
+# else:
+
+#     st.info(
+#         "📤 Upload a PDF to start asking questions."
+#     )
+
+
+
+
+#               < app with ui >                  #          #
+import base64
+import os
+import tempfile
+
+import fitz
 import streamlit as st
 from dotenv import load_dotenv
-
+from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
-
-from langchain_groq import ChatGroq
-from langchain_core.documents import Document
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 
-# ============================================================
-# 1. PAGE CONFIGURATION
-# ============================================================
+# =========================================================
+# ENVIRONMENT
+# =========================================================
 
-st.set_page_config(
-    page_title="Advanced PDF RAG Chatbot",
-    page_icon="📄",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+load_dotenv()
 
-st.title("📄 Advanced PDF RAG Chatbot")
-st.caption(
-    "Multi-Query | Parent-Child Retrieval | Reranking | "
-    "Compression | Answer Verification"
-)
+api_key = os.getenv("GROQ_API_KEY")
 
-
-# ============================================================
-# 2. LOAD ENVIRONMENT VARIABLES
-# ============================================================
-
-PROJECT_FOLDER = Path(__file__).resolve().parent
-load_dotenv(PROJECT_FOLDER / ".env")
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-if not GROQ_API_KEY:
-    st.error("GROQ_API_KEY is missing in the .env file.")
+if not api_key:
+    st.error("❌ GROQ_API_KEY not found.")
     st.stop()
 
+client = Groq(api_key=api_key)
 
-# ============================================================
-# 3. SESSION STATE
-# ============================================================
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-if "pdf_hash" not in st.session_state:
-    st.session_state.pdf_hash = None
-
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-
-if "parent_store" not in st.session_state:
-    st.session_state.parent_store = {}
-
-if "child_chunks" not in st.session_state:
-    st.session_state.child_chunks = []
-
-if "bm25_chunks" not in st.session_state:
-    st.session_state.bm25_chunks = []
+VISION_MODEL = "qwen/qwen3.8-27b"
 
 
-# ============================================================
-# 4. CACHED EMBEDDINGS
-# ============================================================
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 
-@st.cache_resource
-def get_embeddings():
-    return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
+st.set_page_config(
+    page_title="Multimodal PDF RAG",
+    page_icon="📄",
+    layout="wide"
+)
+
+
+# =========================================================
+# CUSTOM UI
+# =========================================================
+
+st.markdown(
+    """
+    <style>
+
+    /* Main background */
+    .stApp {
+        background-color: #f6f7fb;
+    }
+
+    /* Main container */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+    }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e5e7eb;
+    }
+
+    /* Main title */
+    h1 {
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }
+
+    /* Buttons */
+    .stButton > button,
+    .stFormSubmitButton > button {
+        border-radius: 10px;
+        border: none;
+        padding: 0.55rem 1.2rem;
+        font-weight: 600;
+    }
+
+    /* File uploader */
+    [data-testid="stFileUploader"] {
+        background-color: #ffffff;
+        border-radius: 14px;
+        padding: 10px;
+        border: 1px solid #e5e7eb;
+    }
+
+    /* Text input */
+    [data-testid="stTextInput"] input {
+        border-radius: 10px;
+    }
+
+    /* Answer box */
+    .answer-box {
+        background-color: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 20px;
+        margin-top: 10px;
+        line-height: 1.6;
+    }
+
+    /* Source box */
+    .source-box {
+        background-color: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 10px 15px;
+        margin: 6px 0;
+    }
+
+    /* Alerts */
+    [data-testid="stAlert"] {
+        border-radius: 10px;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+
+st.sidebar.title("⚙️ Settings")
+
+screen_layout = st.sidebar.selectbox(
+    "🖥️ Screen Layout",
+    [
+        "Wide screen",
+        "Fit to screen"
+    ]
+)
+
+answer_mode = st.sidebar.selectbox(
+    "🧠 Answer Mode",
+    [
+        "PDF + General Knowledge",
+        "PDF Only"
+    ]
+)
+
+
+# =========================================================
+# SCREEN LAYOUT
+# =========================================================
+
+if screen_layout == "Fit to screen":
+
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 900px;
+            margin: auto;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
     )
 
 
-# ============================================================
-# 5. LOAD PDF AND CREATE PARENT CHUNKS
-# ============================================================
+# =========================================================
+# HEADER
+# =========================================================
 
-@st.cache_data(show_spinner=False)
-def load_pdf_and_create_parent_chunks(pdf_bytes):
-    temp_path = None
+st.title("📄 Multimodal PDF RAG")
+
+st.write(
+    "Upload a PDF and ask questions about its "
+    "text, tables, charts, graphs, diagrams and images."
+)
+
+
+# =========================================================
+# PDF UPLOAD
+# =========================================================
+
+uploaded_file = st.file_uploader(
+    "📤 Upload your PDF",
+    type=["pdf"]
+)
+
+
+# =========================================================
+# WHEN PDF IS UPLOADED
+# =========================================================
+
+if uploaded_file:
+
+    # -----------------------------------------------------
+    # SAVE PDF TEMPORARILY
+    # -----------------------------------------------------
 
     try:
+
         with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=".pdf"
         ) as temp_file:
-            temp_file.write(pdf_bytes)
-            temp_path = temp_file.name
 
-        loader = PyPDFLoader(temp_path)
-        documents = loader.load()
-
-        parent_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=100,
-            separators=[
-                "\n\n",
-                "\n",
-                ". ",
-                " ",
-                ""
-            ]
-        )
-
-        parent_chunks = parent_splitter.split_documents(
-            documents
-        )
-
-        return parent_chunks
-
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
-
-
-# ============================================================
-# 6. CREATE CHILD CHUNKS AND PARENT STORE
-# ============================================================
-
-def create_parent_child_chunks(parent_chunks):
-    child_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=250,
-        chunk_overlap=50,
-        separators=[
-            "\n\n",
-            "\n",
-            ". ",
-            " ",
-            ""
-        ]
-    )
-
-    child_chunks = []
-    parent_store = {}
-
-    for parent_id, parent_doc in enumerate(parent_chunks):
-        parent_key = str(parent_id)
-
-        parent_doc.metadata["parent_id"] = parent_key
-        parent_store[parent_key] = parent_doc
-
-        children = child_splitter.split_documents(
-            [parent_doc]
-        )
-
-        for child_index, child_doc in enumerate(children):
-            child_doc.metadata["parent_id"] = parent_key
-            child_doc.metadata["child_id"] = (
-                f"{parent_key}_{child_index}"
+            temp_file.write(
+                uploaded_file.getvalue()
             )
 
-            child_chunks.append(child_doc)
+            pdf_path = temp_file.name
 
-    return child_chunks, parent_store
+    except Exception as e:
 
-
-# ============================================================
-# 7. CREATE VECTOR STORE
-# ============================================================
-
-def create_vector_store(child_chunks, embeddings, pdf_hash):
-    collection_name = (
-        "pdf_rag_" + pdf_hash[:16]
-    )
-
-    vector_store = Chroma.from_documents(
-        documents=child_chunks,
-        embedding=embeddings,
-        collection_name=collection_name
-    )
-
-    return vector_store
-
-
-# ============================================================
-# 8. INITIALIZE LLM
-# ============================================================
-
-@st.cache_resource
-def get_llm():
-    return ChatGroq(
-        model="openai/gpt-oss-20b",
-        temperature=0
-    )
-
-
-# ============================================================
-# 9. MULTI-QUERY RETRIEVAL
-# ============================================================
-
-def generate_multi_queries(question, llm):
-    multi_query_prompt = PromptTemplate.from_template(
-        """
-        Generate three different search queries for the
-        user's question.
-
-        Rules:
-        - Preserve the original meaning.
-        - Use different wording.
-        - Return only one query per line.
-        - Do not add numbering.
-        - Do not add explanations.
-
-        User question:
-        {question}
-        """
-    )
-
-    query_chain = (
-        multi_query_prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    response = query_chain.invoke({
-        "question": question
-    })
-
-    queries = []
-
-    for line in response.splitlines():
-        query = re.sub(
-            r"^\s*[-*]?\s*\d*[\).\:-]?\s*",
-            "",
-            line
-        ).strip()
-
-        if query:
-            queries.append(query)
-
-    # Include the original question
-    all_queries = [question]
-
-    for query in queries:
-        if query.lower() not in {
-            item.lower() for item in all_queries
-        }:
-            all_queries.append(query)
-
-    return all_queries[:4]
-
-
-def multi_query_retrieval(
-    question,
-    vector_store,
-    parent_store,
-    llm,
-    top_k=3
-):
-    queries = generate_multi_queries(
-        question,
-        llm
-    )
-
-    retrieved_parents = []
-    seen_parent_ids = set()
-
-    for query in queries:
-        child_results = vector_store.similarity_search(
-            query,
-            k=top_k
+        st.error(
+            f"❌ Could not save PDF: {e}"
         )
 
-        for child_doc in child_results:
-            parent_id = child_doc.metadata.get(
-                "parent_id"
-            )
-
-            if (
-                parent_id is not None
-                and parent_id in parent_store
-                and parent_id not in seen_parent_ids
-            ):
-                retrieved_parents.append(
-                    parent_store[parent_id]
-                )
-
-                seen_parent_ids.add(parent_id)
-
-    return retrieved_parents, queries
+        st.stop()
 
 
-# ============================================================
-# 10. LLM-BASED RERANKING
-# ============================================================
-
-rerank_prompt = PromptTemplate.from_template(
-    """
-    You are a document relevance evaluator.
-
-    Give a relevance score from 0 to 10.
-    The score should represent how useful the document
-    is for answering the question.
-
-    Rules:
-    - Return only a number.
-    - Do not provide an explanation.
-    - Use 0 if the document is not relevant.
-
-    Question:
-    {question}
-
-    Document:
-    {document}
-
-    Relevance score:
-    """
-)
-
-
-def rerank_documents(
-    question,
-    documents,
-    llm,
-    top_k=4
-):
-    rerank_chain = (
-        rerank_prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    scored_documents = []
-
-    for doc in documents:
-        try:
-            response = rerank_chain.invoke({
-                "question": question,
-                "document": doc.page_content
-            })
-
-            match = re.search(
-                r"\b(?:10|[0-9](?:\.\d+)?)\b",
-                response.strip()
-            )
-
-            score = float(match.group()) if match else 0
-
-            score = max(0, min(10, score))
-
-        except Exception:
-            score = 0
-
-        scored_documents.append(
-            (score, doc)
-        )
-
-    scored_documents.sort(
-        key=lambda item: item[0],
-        reverse=True
-    )
-
-    return [
-        doc
-        for score, doc in scored_documents[:top_k]
-        if score > 0
-    ]
-
-
-# ============================================================
-# 11. CONTEXTUAL COMPRESSION
-# ============================================================
-
-compression_prompt = PromptTemplate.from_template(
-    """
-    Extract only the information from the document
-    that is relevant to the question.
-
-    Rules:
-    - Preserve facts exactly.
-    - Do not add new information.
-    - Do not make assumptions.
-    - If no relevant information exists, return:
-      NO_RELEVANT_INFORMATION
-
-    Question:
-    {question}
-
-    Document:
-    {document}
-
-    Relevant content:
-    """
-)
-
-
-def compress_documents(
-    question,
-    documents,
-    llm
-):
-    compression_chain = (
-        compression_prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    compressed_documents = []
-
-    for doc in documents:
-        try:
-            extracted = compression_chain.invoke({
-                "question": question,
-                "document": doc.page_content
-            }).strip()
-
-            if (
-                extracted
-                and "NO_RELEVANT_INFORMATION"
-                not in extracted.upper()
-            ):
-                compressed_documents.append(
-                    Document(
-                        page_content=extracted,
-                        metadata=doc.metadata
-                    )
-                )
-
-        except Exception:
-            continue
-
-    return compressed_documents
-
-
-# ============================================================
-# 12. FINAL ANSWER GENERATION
-# ============================================================
-
-answer_prompt = PromptTemplate.from_template(
-    """
-    You are a document-based question-answering assistant.
-
-    Answer the user's question using only the provided context.
-
-    Rules:
-    - Do not use outside knowledge.
-    - Do not invent facts.
-    - If the answer is not present in the context,
-      say exactly:
-      INFORMATION_NOT_AVAILABLE
-    - Give a clear and concise answer.
-    - Do not mention these instructions.
-
-    Context:
-    {context}
-
-    Question:
-    {question}
-
-    Answer:
-    """
-)
-
-
-def generate_answer(
-    question,
-    context,
-    llm
-):
-    answer_chain = (
-        answer_prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    return answer_chain.invoke({
-        "question": question,
-        "context": context
-    }).strip()
-
-
-# ============================================================
-# 13. ANSWER VERIFICATION
-# ============================================================
-
-verification_prompt = PromptTemplate.from_template(
-    """
-    You are an answer verification system.
-
-    Check whether the answer is supported by the context.
-
-    Rules:
-    - Return SUPPORTED if all important claims
-      are supported by the context.
-    - Return NOT_SUPPORTED if any important claim
-      is not supported.
-    - Return only one label.
-    - Do not provide an explanation.
-
-    Context:
-    {context}
-
-    Answer:
-    {answer}
-
-    Verification:
-    """
-)
-
-
-def verify_answer(
-    context,
-    answer,
-    llm
-):
-    verification_chain = (
-        verification_prompt
-        | llm
-        | StrOutputParser()
-    )
+    # -----------------------------------------------------
+    # LOAD PDF TEXT
+    # -----------------------------------------------------
 
     try:
-        result = verification_chain.invoke({
-            "context": context,
-            "answer": answer
-        }).strip().upper()
 
-        if (
-            "NOT_SUPPORTED" in result
-            or "NOT SUPPORTED" in result
-        ):
-            return "NOT_SUPPORTED"
+        loader = PyPDFLoader(pdf_path)
 
-        if "SUPPORTED" in result:
-            return "SUPPORTED"
+        documents = loader.load()
 
-    except Exception:
-        pass
+    except Exception as e:
 
-    return "NOT_SUPPORTED"
+        st.error(
+            f"❌ Could not load PDF: {e}"
+        )
+
+        st.stop()
 
 
-# ============================================================
-# 14. FORMAT SOURCE INFORMATION
-# ============================================================
+    # -----------------------------------------------------
+    # CONVERT PDF PAGES INTO IMAGES
+    # -----------------------------------------------------
 
-def get_source_text(documents):
-    sources = []
+    try:
 
-    for doc in documents:
-        page = doc.metadata.get("page")
+        pdf = fitz.open(pdf_path)
 
-        if page is not None:
-            page_number = page + 1
-            source = f"Page {page_number}"
-        else:
-            source = "Page information unavailable"
+        pages = []
 
-        if source not in sources:
-            sources.append(source)
+        for page_number, page in enumerate(pdf):
 
-    return sources
+            matrix = fitz.Matrix(
+                1.5,
+                1.5
+            )
+
+            pixmap = page.get_pixmap(
+                matrix=matrix,
+                alpha=False
+            )
+
+            image_bytes = pixmap.tobytes(
+                "png"
+            )
+
+            pages.append(
+                {
+                    "page_number": page_number + 1,
+                    "image": image_bytes,
+                    "text": documents[
+                        page_number
+                    ].page_content
+                }
+            )
+
+        pdf.close()
+
+    except Exception as e:
+
+        st.error(
+            f"❌ Could not process PDF pages: {e}"
+        )
+
+        st.stop()
 
 
-# ============================================================
-# 15. DISPLAY CHAT HISTORY
-# ============================================================
+    # -----------------------------------------------------
+    # SUCCESS MESSAGE
+    # -----------------------------------------------------
 
-for message in st.session_state.chat_history:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-
-# ============================================================
-# 16. SIDEBAR
-# ============================================================
-
-with st.sidebar:
-    st.header("⚙️ Settings")
-
-    retrieval_k = st.slider(
-        "Initial retrieval count",
-        min_value=2,
-        max_value=8,
-        value=4
+    st.success(
+        f"✅ PDF loaded successfully — {len(pages)} pages"
     )
 
-    rerank_k = st.slider(
-        "Documents after reranking",
-        min_value=1,
-        max_value=5,
-        value=3
-    )
 
-    enable_verification = st.checkbox(
-        "Enable answer verification",
-        value=True
-    )
+    # =====================================================
+    # QUESTION FORM
+    # =====================================================
+    # Enter key OR Ask button will submit the question.
 
-    if st.button("🗑️ Clear Chat"):
-        st.session_state.chat_history = []
-        st.rerun()
+    with st.form("question_form"):
 
+        question = st.text_input(
+            "❓ Ask anything about your PDF",
+            placeholder="Type your question and press Enter..."
+        )
 
-# ============================================================
-# 17. PDF UPLOAD
-# ============================================================
-
-uploaded_file = st.file_uploader(
-    "Upload a PDF document",
-    type=["pdf"]
-)
-
-if uploaded_file is None:
-    st.info("Please upload a PDF to start chatting.")
-    st.stop()
+        ask = st.form_submit_button(
+            "🔍 Ask"
+        )
 
 
-pdf_bytes = uploaded_file.getvalue()
+    # =====================================================
+    # QUESTION PROCESSING
+    # =====================================================
 
-if not pdf_bytes:
-    st.error("The uploaded PDF is empty.")
-    st.stop()
+    if ask:
 
+        if not question.strip():
 
-current_pdf_hash = hashlib.md5(
-    pdf_bytes
-).hexdigest()
-
-
-# ============================================================
-# 18. PROCESS NEW PDF
-# ============================================================
-
-if (
-    st.session_state.pdf_hash != current_pdf_hash
-    or st.session_state.vector_store is None
-):
-    with st.spinner(
-        "Loading PDF and creating vector database..."
-    ):
-        try:
-            parent_chunks = load_pdf_and_create_parent_chunks(
-                pdf_bytes
+            st.warning(
+                "⚠️ Please enter a question."
             )
 
-            if not parent_chunks:
-                st.error(
-                    "No readable text was found in the PDF."
-                )
-                st.stop()
-
-            child_chunks, parent_store = (
-                create_parent_child_chunks(
-                    parent_chunks
-                )
-            )
-
-            embeddings = get_embeddings()
-
-            vector_store = create_vector_store(
-                child_chunks,
-                embeddings,
-                current_pdf_hash
-            )
-
-            st.session_state.pdf_hash = current_pdf_hash
-            st.session_state.vector_store = vector_store
-            st.session_state.parent_store = parent_store
-            st.session_state.child_chunks = child_chunks
-            st.session_state.chat_history = []
-
-            st.success(
-                f"PDF processed successfully. "
-                f"Parents: {len(parent_store)}, "
-                f"Children: {len(child_chunks)}"
-            )
-
-        except Exception as error:
-            st.error(
-                f"PDF processing failed: {error}"
-            )
             st.stop()
 
 
-# ============================================================
-# 19. INITIALIZE LLM
-# ============================================================
-
-try:
-    llm = get_llm()
-
-except Exception as error:
-    st.error(
-        f"LLM initialization failed: {error}"
-    )
-    st.stop()
-
-
-# ============================================================
-# 20. USER QUESTION
-# ============================================================
-
-question = st.chat_input(
-    "Ask a question about your PDF..."
-)
-
-if question:
-    question = question.strip()
-
-    if not question:
-        st.warning("Please enter a valid question.")
-        st.stop()
-
-    with st.chat_message("user"):
-        st.markdown(question)
-
-    st.session_state.chat_history.append({
-        "role": "user",
-        "content": question
-    })
-
-    try:
         with st.spinner(
-            "Running advanced retrieval..."
+            "🔎 Searching the PDF and analyzing relevant content..."
         ):
-            # --------------------------------------------
-            # Step A: Multi-Query + Parent Retrieval
-            # --------------------------------------------
 
-            retrieved_docs, generated_queries = (
-                multi_query_retrieval(
-                    question=question,
-                    vector_store=st.session_state.vector_store,
-                    parent_store=st.session_state.parent_store,
-                    llm=llm,
-                    top_k=retrieval_k
-                )
+            # -------------------------------------------------
+            # FIND RELEVANT PAGES
+            # -------------------------------------------------
+
+            question_words = set(
+                question.lower().split()
             )
 
-            if not retrieved_docs:
-                answer = (
-                    "INFORMATION_NOT_AVAILABLE"
+            scored_pages = []
+
+            for page in pages:
+
+                page_text = page["text"].lower()
+
+                score = sum(
+                    1
+                    for word in question_words
+                    if len(word) > 2
+                    and word in page_text
                 )
-                verification_result = "NOT_SUPPORTED"
-                compressed_docs = []
+
+                scored_pages.append(
+                    (
+                        score,
+                        page
+                    )
+                )
+
+
+            # Highest matching pages first
+
+            scored_pages.sort(
+                key=lambda x: x[0],
+                reverse=True
+            )
+
+
+            # Pages containing question keywords
+
+            relevant_pages = [
+                page
+                for score, page in scored_pages
+                if score > 0
+            ]
+
+
+            # If no text match exists,
+            # allow visual inspection.
+
+            if not relevant_pages:
+
+                relevant_pages = pages
+
+
+            # Keep request manageable
+
+            relevant_pages = relevant_pages[:3]
+
+
+            # -------------------------------------------------
+            # ANSWER MODE
+            # -------------------------------------------------
+
+            if answer_mode == "PDF Only":
+
+                knowledge_instruction = """
+Use ONLY information available in the PDF.
+
+If the answer cannot be found in the PDF,
+say:
+
+"Information not found in the PDF."
+
+Do not use outside knowledge.
+Do not invent information.
+"""
 
             else:
-                # ----------------------------------------
-                # Step B: Reranking
-                # ----------------------------------------
 
-                reranked_docs = rerank_documents(
-                    question=question,
-                    documents=retrieved_docs,
-                    llm=llm,
-                    top_k=rerank_k
+                knowledge_instruction = """
+Use information from the PDF whenever available.
+
+You may also use your general pretrained knowledge
+when the required information is not available
+in the PDF.
+
+Clearly distinguish PDF information from general
+knowledge when necessary.
+
+Do not invent information.
+"""
+
+
+            # -------------------------------------------------
+            # VISION MODEL PROMPT
+            # -------------------------------------------------
+
+            content = [
+                {
+                    "type": "text",
+                    "text": f"""
+You are answering a question about a PDF.
+
+The PDF may contain:
+
+- normal text
+- tables
+- charts
+- graphs
+- diagrams
+- images
+
+Carefully inspect BOTH:
+
+1. Extracted PDF text
+2. Visual content of the provided PDF pages
+
+{knowledge_instruction}
+
+User question:
+
+{question}
+
+Give a clear and direct answer.
+
+If the answer depends on a chart, table, graph,
+diagram or image, carefully inspect the visual
+content.
+
+Do not guess values that cannot be read.
+"""
+                }
+            ]
+
+
+            # -------------------------------------------------
+            # ADD RELEVANT PAGES
+            # -------------------------------------------------
+
+            for page in relevant_pages:
+
+                base64_image = base64.b64encode(
+                    page["image"]
+                ).decode("utf-8")
+
+
+                # Add extracted text
+
+                content.append(
+                    {
+                        "type": "text",
+                        "text": f"""
+========================
+PDF PAGE {page['page_number']}
+========================
+
+Extracted text:
+
+{page['text'][:5000]}
+"""
+                    }
                 )
 
-                if not reranked_docs:
-                    answer = (
-                        "INFORMATION_NOT_AVAILABLE"
-                    )
-                    verification_result = "NOT_SUPPORTED"
-                    compressed_docs = []
 
-                else:
-                    # ------------------------------------
-                    # Step C: Contextual Compression
-                    # ------------------------------------
+                # Add page image
 
-                    compressed_docs = compress_documents(
-                        question=question,
-                        documents=reranked_docs,
-                        llm=llm
-                    )
-
-                    if not compressed_docs:
-                        answer = (
-                            "INFORMATION_NOT_AVAILABLE"
-                        )
-                        verification_result = "NOT_SUPPORTED"
-
-                    else:
-                        # --------------------------------
-                        # Step D: Create Final Context
-                        # --------------------------------
-
-                        context = "\n\n".join(
-                            doc.page_content
-                            for doc in compressed_docs
-                        )
-
-                        # --------------------------------
-                        # Step E: Generate Answer
-                        # --------------------------------
-
-                        answer = generate_answer(
-                            question=question,
-                            context=context,
-                            llm=llm
-                        )
-
-                        # --------------------------------
-                        # Step F: Verify Answer
-                        # --------------------------------
-
-                        if (
-                            enable_verification
-                            and answer
-                            != "INFORMATION_NOT_AVAILABLE"
-                        ):
-                            verification_result = (
-                                verify_answer(
-                                    context=context,
-                                    answer=answer,
-                                    llm=llm
-                                )
-                            )
-                        else:
-                            verification_result = (
-                                "NOT_SUPPORTED"
-                            )
-
-                        # --------------------------------
-                        # Step G: Safe Fallback
-                        # --------------------------------
-
-                        if (
-                            answer
-                            == "INFORMATION_NOT_AVAILABLE"
-                            or verification_result
-                            != "SUPPORTED"
-                        ):
-                            answer = (
-                                "I could not verify a reliable "
-                                "answer from the uploaded PDF."
-                            )
-
-        # ====================================================
-        # 21. DISPLAY FINAL ANSWER
-        # ====================================================
-
-        with st.chat_message("assistant"):
-            st.markdown(answer)
-
-            if enable_verification:
-                if verification_result == "SUPPORTED":
-                    st.success(
-                        "Answer verification: SUPPORTED"
-                    )
-                else:
-                    st.warning(
-                        "Answer verification: "
-                        "NOT SUPPORTED / UNVERIFIED"
-                    )
-
-            source_documents = (
-                compressed_docs
-                if compressed_docs
-                else []
-            )
-
-            sources = get_source_text(
-                source_documents
-            )
-
-            if sources:
-                with st.expander("📚 Sources"):
-                    for source in sources:
-                        st.write(f"- {source}")
-
-            with st.expander("🔍 Retrieval Details"):
-                st.write("Generated search queries:")
-                for query in generated_queries:
-                    st.write(f"- {query}")
-
-                st.write(
-                    f"Retrieved parent documents: "
-                    f"{len(retrieved_docs)}"
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url":
+                            f"data:image/png;base64,{base64_image}"
+                        }
+                    }
                 )
 
-                st.write(
-                    f"Compressed documents: "
-                    f"{len(compressed_docs)}"
+
+            # =================================================
+            # CALL GROQ VISION MODEL
+            # =================================================
+
+            try:
+
+                response = client.chat.completions.create(
+                    model=VISION_MODEL,
+                    max_completion_tokens=500,
+                    reasoning_effort="none",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": content
+                        }
+                    ]
                 )
 
-    except Exception as error:
-        answer = (
-            "An error occurred while processing your question."
+                answer = (
+                    response
+                    .choices[0]
+                    .message
+                    .content
+                )
+
+            except Exception as e:
+
+                st.error(
+                    f"❌ AI response error: {e}"
+                )
+
+                st.stop()
+
+
+        # =================================================
+        # ANSWER
+        # =================================================
+
+        st.subheader("🤖 Answer")
+
+        st.markdown(
+            f"""
+            <div class="answer-box">
+                {answer}
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-        with st.chat_message("assistant"):
-            st.error(
-                f"{answer}\n\nDetails: {error}"
+
+        # =================================================
+        # SOURCES
+        # =================================================
+
+        st.subheader("📚 Sources")
+
+        for page in relevant_pages:
+
+            st.markdown(
+                f"""
+                <div class="source-box">
+                    📄 <b>Page {page['page_number']}</b>
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
-    st.session_state.chat_history.append({
-        "role": "assistant",
-        "content": answer
-    })
+
+# =========================================================
+# NO PDF MESSAGE
+# =========================================================
+
+else:
+
+    st.info(
+        "📤 Upload a PDF to start asking questions."
+    )
